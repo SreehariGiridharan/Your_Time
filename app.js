@@ -335,6 +335,7 @@ function updateMockIndicator() {
 function renderApp() {
   const now = getCurrentTime();
   const nowMs = now.getTime();
+  const currentWeek = getWeekIndex(now);
   
   // 1. Update Header Time
   const dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' };
