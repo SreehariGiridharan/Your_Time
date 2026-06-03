@@ -1,0 +1,15 @@
+{
+  "activeTasks": [
+    {
+      "id": "waste-0",
+      "type": "waste",
+      "taskId": "waste",
+      "name": "Waste disposal",
+      "roommate": "Raju",
+      "startDate": 1780351200000,
+      "deadline": 1780523999000,
+      "periodId": "Interval 0"
+    }
+  ],
+  "historyLogs": []
+}
