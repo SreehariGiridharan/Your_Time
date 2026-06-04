@@ -14,17 +14,17 @@ const WASTE_TASK = { id: 'waste', name: 'Waste disposal' };
 
 // Rotation Order Configurations
 // Weekly duties shift index cyclical order (e.g. Sreehari -> Adhi -> Raju)
-// Subsidiary duty order always starts with Raju -> Sreehari -> Adhi
-const WASTE_ROOMMATES = ['Raju', 'Sreehari', 'Adhi'];
+// Subsidiary duty order always starts with Adhi -> Sreehari -> Raju
+const WASTE_ROOMMATES = ['Adhi', 'Sreehari', 'Raju'];
 
 // Reference Epochs for Deterministic Calculations
 // Reference Monday: Monday, June 1, 2026 00:00:00 (Week index 0 starts)
 // Weekend 0 is Friday, June 5 00:00:00 to Sunday, June 7 23:59:59
 const REF_WEEKLY_MONDAY = new Date('2026-06-01T00:00:00').getTime();
 
-// Reference Start for Waste (2-day interval): Tuesday, June 2, 2026 00:00:00 (Interval index 0 starts)
-// Interval 0 ends Wednesday, June 3 23:59:59. (Assigned to Raju, due "today")
-const REF_WASTE_START = new Date('2026-06-02T00:00:00').getTime();
+// Reference Start for Waste (2-day interval): Wednesday, June 3, 2026 00:00:00 (Interval index 0 starts)
+// Interval 0 ends Thursday, June 4 23:59:59. (Assigned to Adhi, due today evening)
+const REF_WASTE_START = new Date('2026-06-03T00:00:00').getTime();
 
 // Constant mills
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -34,6 +34,7 @@ const WEEK_MS = 7 * DAY_MS;
 let activeTasks = [];
 let historyLogs = [];
 let mockDate = null; // Stores simulation date, if active. Otherwise null (uses system clock)
+let pendingFirestoreReset = false; // True after a version bump — forces Firestore overwrite on connect
 
 /**
  * Gets the current active timestamp (mock or real)
@@ -58,11 +59,13 @@ function saveState() {
  * Loads state from localStorage or initializes if empty
  */
 function loadState() {
-  const APP_VERSION = 'v3.0';
+  const APP_VERSION = 'v3.1';
   const storedVersion = localStorage.getItem('yt_version');
   if (storedVersion !== APP_VERSION) {
     localStorage.clear();
     localStorage.setItem('yt_version', APP_VERSION);
+    // Flag that Firestore must be overwritten with fresh state (old rotation config is stale)
+    pendingFirestoreReset = true;
   }
 
   const savedActive = localStorage.getItem('yt_active_tasks');
@@ -618,7 +621,12 @@ function startFirestoreListener() {
 
   firestoreUnsubscribe = db.doc(FIRESTORE_DOC_PATH).onSnapshot(
     (docSnap) => {
-      if (docSnap.exists) {
+      if (pendingFirestoreReset) {
+        // Version bump: local config has changed (e.g. new rotation order).
+        // Overwrite Firestore with fresh local state instead of merging stale cloud data.
+        pendingFirestoreReset = false;
+        pushToFirestore();
+      } else if (docSnap.exists) {
         const remote = docSnap.data();
         mergeStates(remote);
       } else {
@@ -660,24 +668,24 @@ async function pushToFirestore() {
  * @param {object} remote - The remote Firestore document data
  */
 function mergeStates(remote) {
+  // Firestore is the single source of truth for completed history and active tasks.
+  // Using a pure remote-wins strategy ensures that undo (moving a task from history
+  // back to active) correctly propagates to all devices — the old additive merge
+  // would re-complete the task by seeing it in the local history copy.
   const remoteActive = remote.activeTasks || [];
   const remoteHistory = remote.historyLogs || [];
 
-  // Combine history logs, filtering duplicates by unique ID
-  const historyMap = new Map();
-  historyLogs.forEach(h => historyMap.set(h.id, h));
-  remoteHistory.forEach(h => historyMap.set(h.id, h));
-  historyLogs = Array.from(historyMap.values());
+  // Replace with remote state entirely; no additive merge
+  historyLogs = remoteHistory;
+  activeTasks = remoteActive;
 
-  // Combine active tasks, filtering out any task already logged in completed history
-  const activeMap = new Map();
-  activeTasks.forEach(t => {
-    if (!historyMap.has(t.id)) activeMap.set(t.id, t);
-  });
-  remoteActive.forEach(t => {
-    if (!historyMap.has(t.id)) activeMap.set(t.id, t);
-  });
-  activeTasks = Array.from(activeMap.values());
+  // Run the scheduler so any newly elapsed intervals are added locally, then push if changed
+  const prevCount = activeTasks.length;
+  updateState(); // may add newly generated tasks to activeTasks & saves
+  if (activeTasks.length !== prevCount) {
+    pushToFirestore();
+    return; // pushToFirestore triggers another snapshot → renderApp via mergeStates
+  }
 
   saveState();
   renderApp();
