@@ -248,11 +248,8 @@ function completeTask(taskId) {
   activeTasks.splice(taskIndex, 1);
   saveState();
   
-  if (isGitHubConfigured()) {
-    pushToGitHub().then(() => renderApp());
-  } else {
-    renderApp();
-  }
+  renderApp();
+  pushToFirestore();
 }
 
 /**
@@ -281,11 +278,8 @@ function undoTask(historyId) {
   historyLogs.splice(hIndex, 1);
   saveState();
   
-  if (isGitHubConfigured()) {
-    pushToGitHub().then(() => renderApp());
-  } else {
-    renderApp();
-  }
+  renderApp();
+  pushToFirestore();
 }
 
 // --- 5. UI Rendering & Helpers ---
@@ -575,94 +569,106 @@ function renderUpcomingWeekDuties(currentWeekIndex, nowMs) {
   });
 }
 
-/// --- 6. GitHub Synchronization Client ---
-const gitHubConfig = {
-  pat: '',
-  repo: '',
-  branch: 'main',
-  path: 'chores.json'
+/// --- 6. Firebase Firestore Synchronization ---
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETUP: Paste your Firebase project config here.
+// Get it from: Firebase Console → Project Settings → Your apps → SDK setup
+// ─────────────────────────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyAGSBUixXyZ5ztwa_Hq_DtO_XYR3rk5p8M",
+  authDomain: "yourtime-chores.firebaseapp.com",
+  projectId: "yourtime-chores",
+  storageBucket: "yourtime-chores.firebasestorage.app",
+  messagingSenderId: "963917934774",
+  appId: "1:963917934774:web:aa73030830e33c14b1f617"
 };
-let currentFileSha = null;
+// ─────────────────────────────────────────────────────────────────────────────
 
-function isGitHubConfigured() {
-  return gitHubConfig.pat && gitHubConfig.repo;
-}
+let db = null;
+let firestoreUnsubscribe = null;
+const FIRESTORE_DOC_PATH = 'chores/state';
 
-async function githubFetch(url, options = {}) {
-  const headers = {
-    'Accept': 'application/vnd.github.v3+json',
-    ...options.headers
-  };
-  if (gitHubConfig.pat) {
-    headers['Authorization'] = `token ${gitHubConfig.pat}`;
-  }
-  return fetch(url, { ...options, headers });
-}
-
-function updateSyncBadge(status, message = '') {
-  const badge = document.getElementById('sync-status-badge');
-  const text = document.getElementById('sync-status-text');
-  if (!badge) return;
-  
-  if (status === 'off') {
-    badge.style.display = 'none';
-  } else {
-    badge.style.display = 'inline-flex';
-    badge.title = message;
-    if (status === 'syncing') {
-      badge.style.borderColor = 'var(--status-pending)';
-      badge.style.color = 'var(--status-pending)';
-      text.textContent = 'Syncing...';
-    } else if (status === 'success') {
-      badge.style.borderColor = 'var(--status-green)';
-      badge.style.color = 'var(--status-green)';
-      text.textContent = 'Synced';
-    } else if (status === 'error') {
-      badge.style.borderColor = 'var(--status-red)';
-      badge.style.color = 'var(--status-red)';
-      text.textContent = 'Sync Error';
-    }
-  }
-}
-
-async function pullAndSync() {
-  if (!isGitHubConfigured()) return;
-  updateSyncBadge('syncing', 'Pulling latest logs from GitHub Cloud...');
-  
-  const url = `https://api.github.com/repos/${gitHubConfig.repo}/contents/${gitHubConfig.path}?ref=${gitHubConfig.branch}`;
-  
+/**
+ * Initializes Firebase app and starts the Firestore real-time listener.
+ */
+function initFirebase() {
   try {
-    const res = await githubFetch(url);
-    if (res.status === 200) {
-      const data = await res.json();
-      currentFileSha = data.sha;
-      const decodedContent = decodeURIComponent(escape(atob(data.content)));
-      const remoteBundle = JSON.parse(decodedContent);
-      
-      mergeStates(remoteBundle);
-      updateSyncBadge('success', 'Synced with GitHub Cloud');
-    } else if (res.status === 404) {
-      updateSyncBadge('syncing', 'Cloud file not found. Initializing repository file...');
-      await pushToGitHub();
-    } else {
-      throw new Error(`Cloud return status ${res.status}`);
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
     }
+    db = firebase.firestore();
+    updateSyncBadge('syncing', 'Connecting to Firebase...');
+    startFirestoreListener();
   } catch (err) {
-    console.error('GitHub Sync Error:', err);
-    updateSyncBadge('error', 'Pull Failed: ' + err.message);
+    console.error('Firebase init error:', err);
+    updateSyncBadge('error', 'Firebase init failed: ' + err.message);
   }
 }
 
+/**
+ * Subscribes to real-time Firestore updates.
+ * Automatically merges remote state with local state whenever the cloud document changes.
+ */
+function startFirestoreListener() {
+  if (!db) return;
+
+  // Unsubscribe from any previous listener before starting a new one
+  if (firestoreUnsubscribe) firestoreUnsubscribe();
+
+  firestoreUnsubscribe = db.doc(FIRESTORE_DOC_PATH).onSnapshot(
+    (docSnap) => {
+      if (docSnap.exists) {
+        const remote = docSnap.data();
+        mergeStates(remote);
+      } else {
+        // Document doesn't exist yet — push local state to initialize the cloud
+        pushToFirestore();
+      }
+      updateSyncBadge('success', 'Synced with Firebase');
+    },
+    (err) => {
+      console.error('Firestore listener error:', err);
+      updateSyncBadge('error', 'Sync Error: ' + err.message);
+    }
+  );
+}
+
+/**
+ * Pushes the current local state (activeTasks + historyLogs) to Firestore.
+ * Called after any state-mutating action (complete, undo).
+ */
+async function pushToFirestore() {
+  if (!db) return;
+  updateSyncBadge('syncing', 'Saving to Firebase...');
+  try {
+    await db.doc(FIRESTORE_DOC_PATH).set({
+      activeTasks: activeTasks,
+      historyLogs: historyLogs,
+      lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    updateSyncBadge('success', 'Synced with Firebase');
+  } catch (err) {
+    console.error('Firestore push error:', err);
+    updateSyncBadge('error', 'Push Failed: ' + err.message);
+  }
+}
+
+/**
+ * Merges remote Firestore state with local state.
+ * Uses ID-based deduplication: history takes precedence over active.
+ * @param {object} remote - The remote Firestore document data
+ */
 function mergeStates(remote) {
   const remoteActive = remote.activeTasks || [];
   const remoteHistory = remote.historyLogs || [];
-  
+
   // Combine history logs, filtering duplicates by unique ID
   const historyMap = new Map();
   historyLogs.forEach(h => historyMap.set(h.id, h));
   remoteHistory.forEach(h => historyMap.set(h.id, h));
   historyLogs = Array.from(historyMap.values());
-  
+
   // Combine active tasks, filtering out any task already logged in completed history
   const activeMap = new Map();
   activeTasks.forEach(t => {
@@ -672,50 +678,64 @@ function mergeStates(remote) {
     if (!historyMap.has(t.id)) activeMap.set(t.id, t);
   });
   activeTasks = Array.from(activeMap.values());
-  
+
   saveState();
   renderApp();
 }
 
-async function pushToGitHub() {
-  if (!isGitHubConfigured()) return;
-  updateSyncBadge('syncing', 'Pushing updates to GitHub Cloud...');
-  
-  const url = `https://api.github.com/repos/${gitHubConfig.repo}/contents/${gitHubConfig.path}`;
-  const bundle = {
-    activeTasks: activeTasks,
-    historyLogs: historyLogs
-  };
-  
-  const jsonStr = JSON.stringify(bundle, null, 2);
-  const base64Content = btoa(unescape(encodeURIComponent(jsonStr)));
-  
-  const body = {
-    message: 'Update roommate chores state [YourTime]',
-    content: base64Content,
-    branch: gitHubConfig.branch
-  };
-  
-  if (currentFileSha) {
-    body.sha = currentFileSha;
-  }
-  
-  try {
-    const res = await githubFetch(url, {
-      method: 'PUT',
-      body: JSON.stringify(body)
-    });
-    
-    if (res.status === 200 || res.status === 201) {
-      const data = await res.json();
-      currentFileSha = data.content.sha;
-      updateSyncBadge('success', 'Changes synced successfully');
+/**
+ * Updates the sync status badge in the header and the Firebase status panel in the sidebar.
+ * @param {string} status - 'syncing' | 'success' | 'error' | 'off'
+ * @param {string} message - Tooltip / display message
+ */
+function updateSyncBadge(status, message = '') {
+  const badge = document.getElementById('sync-status-badge');
+  const text = document.getElementById('sync-status-text');
+  const statusDisplay = document.getElementById('firebase-status-display');
+
+  // Header badge
+  if (badge) {
+    if (status === 'off') {
+      badge.style.display = 'none';
     } else {
-      throw new Error(`Write failed with status ${res.status}`);
+      badge.style.display = 'inline-flex';
+      badge.title = message;
+      if (status === 'syncing') {
+        badge.style.borderColor = 'var(--status-pending)';
+        badge.style.color = 'var(--status-pending)';
+        if (text) text.textContent = 'Syncing...';
+      } else if (status === 'success') {
+        badge.style.borderColor = 'var(--status-green)';
+        badge.style.color = 'var(--status-green)';
+        if (text) text.textContent = 'Synced \u2713';
+      } else if (status === 'error') {
+        badge.style.borderColor = 'var(--status-red)';
+        badge.style.color = 'var(--status-red)';
+        if (text) text.textContent = 'Sync Error';
+      }
     }
-  } catch (err) {
-    console.error('GitHub Push Error:', err);
-    updateSyncBadge('error', 'Push Failed: ' + err.message);
+  }
+
+  // Sidebar Firebase status panel
+  if (statusDisplay) {
+    const label = message || status;
+    if (status === 'syncing') {
+      statusDisplay.style.borderColor = 'var(--status-pending)';
+      statusDisplay.style.color = 'var(--status-pending)';
+      statusDisplay.textContent = '\u23F3 ' + label;
+    } else if (status === 'success') {
+      statusDisplay.style.borderColor = 'var(--status-green)';
+      statusDisplay.style.color = 'var(--status-green)';
+      statusDisplay.textContent = '\u2713 ' + label;
+    } else if (status === 'error') {
+      statusDisplay.style.borderColor = 'var(--status-red)';
+      statusDisplay.style.color = 'var(--status-red)';
+      statusDisplay.textContent = '\u2715 ' + label;
+    } else {
+      statusDisplay.style.borderColor = 'var(--border)';
+      statusDisplay.style.color = 'var(--text-muted)';
+      statusDisplay.textContent = label || 'Disconnected';
+    }
   }
 }
 
@@ -723,69 +743,49 @@ async function pushToGitHub() {
 
 document.addEventListener('DOMContentLoaded', () => {
   loadState();
-  
-  // Load GitHub Sync fields if configured
-  const savedPat = localStorage.getItem('gh_sync_pat');
-  const savedRepo = localStorage.getItem('gh_sync_repo');
-  const savedBranch = localStorage.getItem('gh_sync_branch') || 'main';
-  const savedPath = localStorage.getItem('gh_sync_path') || 'chores.json';
-  
-  if (savedPat && savedRepo) {
-    gitHubConfig.pat = savedPat;
-    gitHubConfig.repo = savedRepo;
-    gitHubConfig.branch = savedBranch;
-    gitHubConfig.path = savedPath;
-    
-    document.getElementById('gh-pat').value = savedPat;
-    document.getElementById('gh-repo').value = savedRepo;
-    document.getElementById('gh-branch').value = savedBranch;
-    document.getElementById('gh-path').value = savedPath;
-    
-    document.getElementById('gh-disconnect-btn').style.display = 'block';
-    
-    // Initial sync load
-    pullAndSync();
-  }
-  
-  // Initial task generation check based on whatever clock is active
+
+  // Initial task generation and render
   updateState();
   renderApp();
-  
+
+  // Initialize Firebase real-time sync
+  initFirebase();
+
   // Theme Toggle Button
   const themeBtn = document.getElementById('theme-toggle');
   themeBtn.addEventListener('click', () => {
     const htmlEl = document.documentElement;
     const curTheme = htmlEl.getAttribute('data-theme');
     const nextTheme = curTheme === 'dark' ? 'light' : 'dark';
-    
+
     htmlEl.setAttribute('data-theme', nextTheme);
     localStorage.setItem('theme', nextTheme);
   });
-  
+
   // Theme Loader
   const storedTheme = localStorage.getItem('theme');
   if (storedTheme) {
     document.documentElement.setAttribute('data-theme', storedTheme);
   }
-  
+
   // Toggle Dev Sandbox Menu
   const devToggle = document.getElementById('dev-toggle');
   const devClose = document.getElementById('dev-close');
   const devPanel = document.getElementById('dev-panel');
-  
+
   devToggle.addEventListener('click', () => {
     const show = devPanel.style.display === 'none';
     devPanel.style.display = show ? 'block' : 'none';
   });
-  
+
   devClose.addEventListener('click', () => {
     devPanel.style.display = 'none';
   });
-  
+
   // Hook Dev Inputs
   const dateInput = document.getElementById('mock-date-input');
   const timeInput = document.getElementById('mock-time-input');
-  
+
   function handleDevTimeChange() {
     const dateStr = dateInput.value;
     const timeStr = timeInput.value;
@@ -797,98 +797,55 @@ document.addEventListener('DOMContentLoaded', () => {
       renderApp();
     }
   }
-  
+
   dateInput.addEventListener('input', handleDevTimeChange);
   timeInput.addEventListener('input', handleDevTimeChange);
-  
+
   // Dev Actions
   document.getElementById('dev-today-btn').addEventListener('click', () => {
     mockDate = null;
     localStorage.removeItem('yt_mock_date');
-    
-    // Set form to current computer date/time
+
     const current = new Date();
     const isoString = new Date(current.getTime() - current.getTimezoneOffset() * 60000).toISOString();
     dateInput.value = isoString.substring(0, 10);
     timeInput.value = isoString.substring(11, 16);
-    
+
     updateMockIndicator();
     updateState();
     renderApp();
   });
-  
+
   document.getElementById('dev-add-day-btn').addEventListener('click', () => {
     const base = getCurrentTime().getTime();
     const nextDate = new Date(base + DAY_MS);
     const offsetIso = new Date(nextDate.getTime() - nextDate.getTimezoneOffset() * 60000).toISOString();
-    
+
     dateInput.value = offsetIso.substring(0, 10);
     timeInput.value = offsetIso.substring(11, 16);
-    
+
     handleDevTimeChange();
   });
-  
+
   document.getElementById('dev-add-week-btn').addEventListener('click', () => {
     const base = getCurrentTime().getTime();
     const nextDate = new Date(base + WEEK_MS);
     const offsetIso = new Date(nextDate.getTime() - nextDate.getTimezoneOffset() * 60000).toISOString();
-    
+
     dateInput.value = offsetIso.substring(0, 10);
     timeInput.value = offsetIso.substring(11, 16);
-    
+
     handleDevTimeChange();
   });
-  
+
   // History Filter listeners
   document.getElementById('history-search').addEventListener('input', renderHistoryTable);
   document.getElementById('history-filter-user').addEventListener('change', renderHistoryTable);
   document.getElementById('history-filter-status').addEventListener('change', renderHistoryTable);
-  
-  // GitHub Settings Hook
-  document.getElementById('gh-save-btn').addEventListener('click', async () => {
-    const pat = document.getElementById('gh-pat').value.trim();
-    const repo = document.getElementById('gh-repo').value.trim();
-    const branch = document.getElementById('gh-branch').value.trim() || 'main';
-    const path = document.getElementById('gh-path').value.trim() || 'chores.json';
-    
-    if (!pat || !repo) {
-      alert('Please enter both GitHub PAT and Repository name.');
-      return;
-    }
-    
-    gitHubConfig.pat = pat;
-    gitHubConfig.repo = repo;
-    gitHubConfig.branch = branch;
-    gitHubConfig.path = path;
-    
-    localStorage.setItem('gh_sync_pat', pat);
-    localStorage.setItem('gh_sync_repo', repo);
-    localStorage.setItem('gh_sync_branch', branch);
-    localStorage.setItem('gh_sync_path', path);
-    
-    document.getElementById('gh-disconnect-btn').style.display = 'block';
-    
-    await pullAndSync();
-  });
-  
-  document.getElementById('gh-disconnect-btn').addEventListener('click', () => {
-    localStorage.removeItem('gh_sync_pat');
-    localStorage.removeItem('gh_sync_repo');
-    localStorage.removeItem('gh_sync_branch');
-    localStorage.removeItem('gh_sync_path');
-    
-    gitHubConfig.pat = '';
-    gitHubConfig.repo = '';
-    gitHubConfig.branch = 'main';
-    gitHubConfig.path = 'chores.json';
-    
-    document.getElementById('gh-pat').value = '';
-    document.getElementById('gh-repo').value = '';
-    document.getElementById('gh-branch').value = 'main';
-    document.getElementById('gh-path').value = 'chores.json';
-    
-    document.getElementById('gh-disconnect-btn').style.display = 'none';
-    currentFileSha = null;
-    updateSyncBadge('off');
+
+  // Firebase Reconnect Button
+  document.getElementById('firebase-reconnect-btn').addEventListener('click', () => {
+    if (firestoreUnsubscribe) firestoreUnsubscribe();
+    initFirebase();
   });
 });

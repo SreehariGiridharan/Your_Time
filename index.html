@@ -245,40 +245,30 @@
           </div>
         </section>
 
-        <!-- GitHub Cloud Sync Settings -->
+        <!-- Firebase Cloud Sync Status Panel -->
         <section class="settings-panel">
           <div class="section-title-wrapper">
             <h2>Cloud Synchronization</h2>
-            <p class="subtitle">Sync history across roommates via GitHub</p>
+            <p class="subtitle">Sync via Firebase</p>
           </div>
-          
+
           <div class="settings-actions">
-            <div class="control-group" style="margin-bottom: 0.5rem;">
-              <label for="gh-pat" style="font-size: 0.75rem; font-weight: 600;">GitHub PAT (Token):</label>
-              <input type="password" id="gh-pat" class="search-input" style="width: 100%; font-size: 0.8rem; padding: 0.4rem 0.6rem;" placeholder="ghp_xxxxxxxxxxxx">
+            <div class="control-group" style="margin-bottom: 0.75rem;">
+              <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.5; margin: 0;">
+                Real-time sync is powered by Firebase Firestore. All roommates' devices update instantly when any chore is marked done.
+              </p>
             </div>
-            <div class="control-group" style="margin-bottom: 0.5rem;">
-              <label for="gh-repo" style="font-size: 0.75rem; font-weight: 600;">Repository (owner/repo):</label>
-              <input type="text" id="gh-repo" class="search-input" style="width: 100%; font-size: 0.8rem; padding: 0.4rem 0.6rem;" placeholder="username/repo-name">
-            </div>
-            <div class="control-group settings-grid-row">
-              <div>
-                <label for="gh-branch" style="font-size: 0.75rem; font-weight: 600;">Branch:</label>
-                <input type="text" id="gh-branch" class="search-input" style="width: 100%; font-size: 0.8rem; padding: 0.4rem 0.6rem;" placeholder="main" value="main">
-              </div>
-              <div>
-                <label for="gh-path" style="font-size: 0.75rem; font-weight: 600;">File Path:</label>
-                <input type="text" id="gh-path" class="search-input" style="width: 100%; font-size: 0.8rem; padding: 0.4rem 0.6rem;" placeholder="chores.json" value="chores.json">
+            <div class="control-group" style="margin-bottom: 0.75rem;">
+              <label style="font-size: 0.75rem; font-weight: 600; display: block; margin-bottom: 0.35rem;">Connection Status:</label>
+              <div id="firebase-status-display" style="font-size: 0.8rem; padding: 0.4rem 0.6rem; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--text-muted);">
+                Initializing...
               </div>
             </div>
-            <button id="gh-save-btn" class="btn btn-primary btn-full" style="margin-top: 0.5rem; padding: 0.5rem 1rem; font-size: 0.85rem;">
+            <button id="firebase-reconnect-btn" class="btn btn-primary btn-full" style="margin-top: 0.5rem; padding: 0.5rem 1rem; font-size: 0.85rem;">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
               </svg>
-              Save & Sync Now
-            </button>
-            <button id="gh-disconnect-btn" class="btn btn-danger btn-full" style="display: none; margin-top: 0.25rem; padding: 0.5rem 1rem; font-size: 0.85rem;">
-              Disconnect Sync
+              Reconnect
             </button>
           </div>
         </section>
@@ -343,6 +333,10 @@
       <p>&copy; 2026 YourTime Roommate Chore Planner. Built with Visual Excellence.</p>
     </div>
   </footer>
+
+  <!-- Firebase SDK (CDN) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 
   <script src="app.js"></script>
 </body>
