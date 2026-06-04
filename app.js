@@ -59,7 +59,7 @@ function saveState() {
  * Loads state from localStorage or initializes if empty
  */
 function loadState() {
-  const APP_VERSION = 'v3.1';
+  const APP_VERSION = 'v3.2';
   const storedVersion = localStorage.getItem('yt_version');
   if (storedVersion !== APP_VERSION) {
     localStorage.clear();
